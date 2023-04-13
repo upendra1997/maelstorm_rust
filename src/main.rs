@@ -1,4 +1,4 @@
-use std::io::{stdin, stdout, Write};
+use std::io::stdin;
 
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -48,17 +48,17 @@ impl PayloadError {
 }
 
 #[derive(Debug)]
-struct State<ExtraState: Default> {
+struct Node<State: Default> {
     id: String,
     node_ids: Vec<String>,
-    extra_state: ExtraState,
+    extra_state: State,
 }
 
-impl<a> State<a>
+impl<State> Node<State>
 where
-    a: Default,
+    State: Default,
 {
-    fn new() -> anyhow::Result<State<a>> {
+    fn new() -> anyhow::Result<Node<State>> {
         let mut input = String::new();
         stdin().read_line(&mut input)?;
         match de::from_str::<Message<Payload<InitRequest>>>(&input) {
@@ -74,19 +74,26 @@ where
                     },
                 };
                 println!("{}", ser::to_string(&ack_response)?);
-                Ok(State {
+                Ok(Node {
                     id: init_mesage.body.extra_info.node_id,
                     node_ids: init_mesage.body.extra_info.node_ids,
-                    extra_state: a::default(),
+                    extra_state: State::default(),
                 })
             }
             Err(e) => {
                 let error_response =
-                    PayloadError::error(0, "error parsing init message".to_string());
+                    PayloadError::error(0, format!("error parsing init message: {}", e));
                 println!("{}", ser::to_string(&error_response)?);
                 Err(anyhow!("error parsing input message"))
             }
         }
+    }
+
+    fn run<Req, Res>(self) -> anyhow::Result<()> where 
+        Req: for<'a> Deserialize<'a>,
+        Res: Serialize,
+        Self: Service<State, Req, Res> {
+        <Node<State> as Service<State, Req, Res>>::start(self)
     }
 }
 
@@ -96,23 +103,22 @@ where
     Request: for<'a> Deserialize<'a>,
     Response: Serialize,
 {
-    fn step(request: Payload<Request>) -> Payload<Response>;
-    fn start(node: State<ExtraState>) -> anyhow::Result<()>
+    fn handle(request: Payload<Request>) -> Payload<Response>;
+    fn start(node: Node<ExtraState>) -> anyhow::Result<()>
     where
         Self: Sized,
     {
         loop {
             let mut input = String::new();
-            stdin().read_line(&mut input);
+            stdin().read_line(&mut input)?;
             let request = de::from_str::<Message<Payload<Request>>>(&input)?;
-            let mut response = Self::step(request.body);
+            let response = Self::handle(request.body);
             let message = Message {
                 src: node.id.to_string(),
                 dest: request.src,
                 body: response,
             };
             println!("{}", ser::to_string(&message)?);
-            // eprintln!("Error Reading from stdin");
         }
     }
 }
@@ -124,8 +130,8 @@ struct EchoPayload {
     echo: String,
 }
 
-impl Service<Echo, EchoPayload, EchoPayload> for State<Echo> {
-    fn step(request: Payload<EchoPayload>) -> Payload<EchoPayload> {
+impl Service<Echo, EchoPayload, EchoPayload> for Node<Echo> {
+    fn handle(request: Payload<EchoPayload>) -> Payload<EchoPayload> {
         Payload {
             type_payload: "echo_ok".to_string(),
             msg_id: request.msg_id,
@@ -138,7 +144,7 @@ impl Service<Echo, EchoPayload, EchoPayload> for State<Echo> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let node = State::<Echo>::new()?;
-    <State<Echo> as Service<Echo, EchoPayload, EchoPayload>>::start(node);
+    let node = Node::<Echo>::new()?;
+    node.run()?;
     Ok(())
 }
