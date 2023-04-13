@@ -1,7 +1,4 @@
-use std::{
-    any,
-    io::{stdin, stdout, Write},
-};
+use std::io::{stdin, stdout, Write};
 
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -64,18 +61,22 @@ where
     fn new() -> anyhow::Result<State<a>> {
         let mut input = String::new();
         stdin().read_line(&mut input)?;
-        match de::from_str::<Payload<InitRequest>>(&input) {
+        match de::from_str::<Message<Payload<InitRequest>>>(&input) {
             Ok(init_mesage) => {
-                let ack_response = Payload {
-                    type_payload: "init_ok".to_string(),
-                    msg_id: None,
-                    in_reply_to: init_mesage.msg_id,
-                    extra_info: (),
+                let ack_response = Message {
+                    src: init_mesage.dest,
+                    dest: init_mesage.src,
+                    body: Payload {
+                        type_payload: "init_ok".to_string(),
+                        msg_id: None,
+                        in_reply_to: init_mesage.body.msg_id,
+                        extra_info: (),
+                    },
                 };
                 println!("{}", ser::to_string(&ack_response)?);
                 Ok(State {
-                    id: init_mesage.extra_info.node_id,
-                    node_ids: init_mesage.extra_info.node_ids,
+                    id: init_mesage.body.extra_info.node_id,
+                    node_ids: init_mesage.body.extra_info.node_ids,
                     extra_state: a::default(),
                 })
             }
@@ -89,20 +90,55 @@ where
     }
 }
 
-trait Service<ExtraState, Request, Response> {
+trait Service<ExtraState, Request, Response>
+where
+    ExtraState: Default,
+    Request: for<'a> Deserialize<'a>,
+    Response: Serialize,
+{
     fn step(request: Payload<Request>) -> Payload<Response>;
-    fn start(state: State<()>) -> anyhow::Result<()> {
-        let mut input = String::new();
+    fn start(node: State<ExtraState>) -> anyhow::Result<()>
+    where
+        Self: Sized,
+    {
         loop {
-            while let Ok(_) = stdin().read_line(&mut input) {
-                stdout().write_all(b"adskajhdaksd");
-            }
-            eprintln!("Error Reading from stdin");
+            let mut input = String::new();
+            stdin().read_line(&mut input);
+            let request = de::from_str::<Message<Payload<Request>>>(&input)?;
+            let mut response = Self::step(request.body);
+            let message = Message {
+                src: node.id.to_string(),
+                dest: request.src,
+                body: response,
+            };
+            println!("{}", ser::to_string(&message)?);
+            // eprintln!("Error Reading from stdin");
+        }
+    }
+}
+
+#[derive(Default)]
+struct Echo;
+#[derive(Deserialize, Serialize)]
+struct EchoPayload {
+    echo: String,
+}
+
+impl Service<Echo, EchoPayload, EchoPayload> for State<Echo> {
+    fn step(request: Payload<EchoPayload>) -> Payload<EchoPayload> {
+        Payload {
+            type_payload: "echo_ok".to_string(),
+            msg_id: request.msg_id,
+            in_reply_to: request.msg_id,
+            extra_info: EchoPayload {
+                echo: request.extra_info.echo,
+            },
         }
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    State::<()>::new()?;
+    let node = State::<Echo>::new()?;
+    <State<Echo> as Service<Echo, EchoPayload, EchoPayload>>::start(node);
     Ok(())
 }
