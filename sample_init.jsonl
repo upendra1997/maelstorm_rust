@@ -1,0 +1,2 @@
+{ "src": "me", "dest": "test_node", "body": { "type": "init", "node_id": "node-1", "node_ids": [] } }
+{ "src": "me", "dest": "test_node", "body": { "type": "generate" } }
