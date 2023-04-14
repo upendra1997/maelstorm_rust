@@ -5,13 +5,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::{de, ser};
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Payload<ExtraInfo> {
+pub struct Payload<Info> {
     #[serde(rename = "type")]
     pub type_payload: String,
     pub msg_id: Option<usize>,
     pub in_reply_to: Option<usize>,
     #[serde(flatten)]
-    pub extra_info: ExtraInfo,
+    pub info: Info,
+}
+
+impl<Info> Payload<Info> {
+    pub fn new(type_payload: String, info: Info) -> Self {
+        Payload {
+            type_payload: type_payload,
+            msg_id: None,
+            in_reply_to: None,
+            info,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -19,10 +30,6 @@ struct Message<Payload> {
     src: String,
     dest: String,
     body: Payload,
-}
-
-trait CreatePayload<ExtraInfo> {
-    fn new() -> Payload<ExtraInfo>;
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -38,20 +45,16 @@ struct PayloadError {
 
 impl PayloadError {
     fn error(code: usize, text: String) -> Payload<PayloadError> {
-        Payload {
-            type_payload: "error".to_string(),
-            msg_id: None,
-            in_reply_to: None,
-            extra_info: PayloadError { code, text },
-        }
+        let error = PayloadError { code, text };
+        Payload::new("error".to_string(), error)
     }
 }
 
 #[derive(Debug)]
 pub struct Node<State: Default> {
-    id: String,
-    node_ids: Vec<String>,
-    extra_state: State,
+    pub id: String,
+    pub node_ids: Vec<String>,
+    pub state: State,
 }
 
 impl<State> Node<State>
@@ -68,16 +71,16 @@ where
                     dest: init_mesage.src,
                     body: Payload {
                         type_payload: "init_ok".to_string(),
-                        msg_id: None,
+                        msg_id: init_mesage.body.msg_id,
                         in_reply_to: init_mesage.body.msg_id,
-                        extra_info: (),
+                        info: (),
                     },
                 };
                 println!("{}", ser::to_string(&ack_response)?);
                 Ok(Node {
-                    id: init_mesage.body.extra_info.node_id,
-                    node_ids: init_mesage.body.extra_info.node_ids,
-                    extra_state: State::default(),
+                    id: init_mesage.body.info.node_id,
+                    node_ids: init_mesage.body.info.node_ids,
+                    state: State::default(),
                 })
             }
             Err(e) => {
@@ -89,13 +92,34 @@ where
         }
     }
 
-    pub fn run<Request, Response>(self) -> anyhow::Result<()>
+    pub fn run<Request, Response>(&mut self) -> anyhow::Result<()>
     where
         Request: for<'a> Deserialize<'a>,
         Response: Serialize,
         Self: Service<State, Request, Response>,
     {
-        <Node<State> as Service<State, Request, Response>>::start(self)
+        loop {
+            let mut input = String::new();
+            stdin().read_line(&mut input)?;
+            let request = de::from_str::<Message<Payload<Request>>>(&input)?;
+            let msg_id = request.body.msg_id;
+            match Self::handle(self, request.body) {
+                Ok(mut response) => {
+                    response.in_reply_to = msg_id;
+                    let message = Message {
+                        src: self.id.to_string(),
+                        dest: request.src,
+                        body: response,
+                    };
+                    println!("{}", ser::to_string(&message)?);
+                }
+                Err(e) => {
+                    let error_response =
+                        PayloadError::error(1, format!("error processing message: {}", e));
+                    println!("{}", ser::to_string(&error_response)?);
+                }
+            }
+        }
     }
 }
 
@@ -105,22 +129,5 @@ where
     Request: for<'a> Deserialize<'a>,
     Response: Serialize,
 {
-    fn handle(request: Payload<Request>) -> Payload<Response>;
-    fn start(node: Node<ExtraState>) -> anyhow::Result<()>
-    where
-        Self: Sized,
-    {
-        loop {
-            let mut input = String::new();
-            stdin().read_line(&mut input)?;
-            let request = de::from_str::<Message<Payload<Request>>>(&input)?;
-            let response = Self::handle(request.body);
-            let message = Message {
-                src: node.id.to_string(),
-                dest: request.src,
-                body: response,
-            };
-            println!("{}", ser::to_string(&message)?);
-        }
-    }
+    fn handle(&mut self, request: Payload<Request>) -> anyhow::Result<Payload<Response>>;
 }

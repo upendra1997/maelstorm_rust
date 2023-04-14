@@ -9,20 +9,15 @@ struct EchoPayload {
 }
 
 impl Service<Echo, EchoPayload, EchoPayload> for Node<Echo> {
-    fn handle(request: Payload<EchoPayload>) -> Payload<EchoPayload> {
-        Payload {
-            type_payload: "echo_ok".to_string(),
-            msg_id: request.msg_id,
-            in_reply_to: request.msg_id,
-            extra_info: EchoPayload {
-                echo: request.extra_info.echo,
-            },
-        }
+    fn handle(&mut self, request: Payload<EchoPayload>) -> anyhow::Result<Payload<EchoPayload>> {
+        let mut response = Payload::new("echo_ok".to_string(), request.info);
+        response.msg_id = request.msg_id;
+        Ok(response)
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    let node = Node::<Echo>::new()?;
+    let mut node = Node::<Echo>::new()?;
     node.run()?;
     Ok(())
 }
