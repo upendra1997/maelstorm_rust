@@ -1,7 +1,7 @@
 use std::time::SystemTime;
 
 use rand::random;
-use rustengan::{Node, Payload, Service};
+use rustengan::{Node, Payload, Request};
 use serde::{Deserialize, Serialize};
 
 struct State {
@@ -9,7 +9,7 @@ struct State {
 }
 
 #[derive(Deserialize)]
-struct Request {}
+struct Req {}
 
 #[derive(Serialize)]
 struct Response {
@@ -24,28 +24,28 @@ impl Default for State {
     }
 }
 
-impl Service<State, Request, Response> for Node<State> {
-    fn handle(
-        &mut self,
-        _request: Payload<Request>,
-    ) -> anyhow::Result<rustengan::Payload<Response>> {
+impl Request for Req {
+    type Response = Response;
+}
+
+fn main() -> anyhow::Result<()> {
+    let mut node = Node::<State, Req>::new()?;
+    node.add_handler(&|node, _req| {
+        let mut state = node.state.borrow_mut();
         let time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let result = 
-            31_u128.wrapping_pow(2).wrapping_mul(self.state.message_count)
+        let result = 31_u128
+            .wrapping_pow(2)
+            .wrapping_mul(state.message_count)
             .wrapping_add(31_u128.wrapping_pow(1).wrapping_mul(time))
             .wrapping_add(random());
         let mut response = Payload::new("generate_ok".to_string(), Response { id: result });
-        response.msg_id = Some(usize::try_from(self.state.message_count)?);
-        self.state.message_count = self.state.message_count.wrapping_add(1);
+        response.msg_id = Some(usize::try_from(state.message_count)?);
+        state.message_count = state.message_count.wrapping_add(1);
         Ok(response)
-    }
-}
-
-fn main() -> anyhow::Result<()> {
-    let mut node = Node::<State>::new()?;
+    });
     node.run()?;
     Ok(())
 }

@@ -1,4 +1,4 @@
-use rustengan::{Node, Payload, Service};
+use rustengan::{Node, Payload, Request};
 use serde::{Deserialize, Serialize};
 
 #[derive(Default)]
@@ -8,16 +8,17 @@ struct EchoPayload {
     echo: String,
 }
 
-impl Service<Echo, EchoPayload, EchoPayload> for Node<Echo> {
-    fn handle(&mut self, request: Payload<EchoPayload>) -> anyhow::Result<Payload<EchoPayload>> {
-        let mut response = Payload::new("echo_ok".to_string(), request.info);
-        response.msg_id = request.msg_id;
-        Ok(response)
-    }
+impl Request for EchoPayload {
+    type Response = EchoPayload;
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut node = Node::<Echo>::new()?;
+    let mut node = Node::<Echo, EchoPayload>::new()?;
+    node.add_handler(&|_node, request| {
+        let mut response = Payload::new("echo_ok".to_string(), request.info);
+        response.msg_id = request.msg_id;
+        Ok(response)
+    });
     node.run()?;
     Ok(())
 }

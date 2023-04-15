@@ -1,4 +1,4 @@
-use std::io::stdin;
+use std::{cell::RefCell, io::stdin};
 
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ pub struct Payload<Info> {
 impl<Info> Payload<Info> {
     pub fn new(type_payload: String, info: Info) -> Self {
         Payload {
-            type_payload: type_payload,
+            type_payload,
             msg_id: None,
             in_reply_to: None,
             info,
@@ -50,18 +50,24 @@ impl PayloadError {
     }
 }
 
-#[derive(Debug)]
-pub struct Node<State: Default> {
-    pub id: String,
-    pub node_ids: Vec<String>,
-    pub state: State,
+pub trait Request {
+    type Response;
 }
 
-impl<State> Node<State>
+pub struct Node<'a, State: Default, Req: Request> {
+    pub id: String,
+    pub node_ids: Vec<String>,
+    pub state: RefCell<State>,
+    handlers:
+        Vec<&'a (dyn for<'b> Fn(&'b Self, Payload<Req>) -> anyhow::Result<Payload<Req::Response>>)>,
+}
+
+impl<State, Req> Node<'_, State, Req>
 where
     State: Default,
+    Req: Request,
 {
-    pub fn new() -> anyhow::Result<Node<State>> {
+    pub fn new() -> anyhow::Result<Node<'static, State, Req>> {
         let mut input = String::new();
         stdin().read_line(&mut input)?;
         match de::from_str::<Message<Payload<InitRequest>>>(&input) {
@@ -80,7 +86,8 @@ where
                 Ok(Node {
                     id: init_mesage.body.info.node_id,
                     node_ids: init_mesage.body.info.node_ids,
-                    state: State::default(),
+                    state: RefCell::new(State::default()),
+                    handlers: Vec::new(),
                 })
             }
             Err(e) => {
@@ -92,34 +99,51 @@ where
         }
     }
 
-    pub fn run<Request, Response>(&mut self) -> anyhow::Result<()>
+    pub fn run(&mut self) -> anyhow::Result<()>
     where
-        Request: for<'a> Deserialize<'a>,
-        Response: Serialize,
-        Self: Service<State, Request, Response>,
+        Req: for<'a> Deserialize<'a>,
+        Req::Response: Serialize,
+        // Self: Service<State, Req, Req::Response>,
     {
         loop {
             let mut input = String::new();
             stdin().read_line(&mut input)?;
-            let request = de::from_str::<Message<Payload<Request>>>(&input)?;
-            let msg_id = request.body.msg_id;
-            match Self::handle(self, request.body) {
-                Ok(mut response) => {
-                    response.in_reply_to = msg_id;
-                    let message = Message {
-                        src: self.id.to_string(),
-                        dest: request.src,
-                        body: response,
-                    };
-                    println!("{}", ser::to_string(&message)?);
+            for handler in &self.handlers {
+                let request = de::from_str::<Message<Payload<Req>>>(&input);
+                if let Err(e) = request {
+                    eprintln!("unable to process request {} with error {}", input, e);
+                    continue;
                 }
-                Err(e) => {
-                    let error_response =
-                        PayloadError::error(1, format!("error processing message: {}", e));
-                    println!("{}", ser::to_string(&error_response)?);
+                let request = request.unwrap();
+                let msg_id = request.body.msg_id;
+                match handler(self, request.body) {
+                    Ok(mut response) => {
+                        response.in_reply_to = msg_id;
+                        let message = Message {
+                            src: self.id.to_string(),
+                            dest: request.src,
+                            body: response,
+                        };
+                        println!("{}", ser::to_string(&message)?);
+                    }
+                    Err(e) => {
+                        let error_response =
+                            PayloadError::error(1, format!("error processing message: {}", e));
+                        println!("{}", ser::to_string(&error_response)?);
+                    }
                 }
             }
         }
+    }
+
+    pub fn add_handler(
+        &mut self,
+        handler: &'static dyn for<'b> Fn(
+            &'b Node<'_, State, Req>,
+            Payload<Req>,
+        ) -> anyhow::Result<Payload<Req::Response>>,
+    ) {
+        self.handlers.push(handler);
     }
 }
 
